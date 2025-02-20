@@ -14,7 +14,7 @@ orgChem_file <- "data/PUR_product_database/wei_data/active_ing_allowed_organic_w
 
 
 # Set year range
-PURYr <- data.frame(year = 2011:2022, Yr = 11:22)
+PURYr <- data.frame(year = 2011:2014, Yr = 11:14)
 prodType_list <- list()
 udc_combined <- list()
 
@@ -69,6 +69,9 @@ for (year in PURYr$year) {
   
   combined_prodType <- bind_rows(prodType_list, .id = "year")
   
+  #### Export merged data after the first merge
+  write_csv(merged_data, glue::glue("prodType_{year}.csv"))
+  
   
   # Process and clean the OrgChem data
   orgChem <- read_csv(orgChem_file) %>% clean_names() %>%
@@ -79,6 +82,10 @@ for (year in PURYr$year) {
     group_by(chem_code) %>%
     slice(1) %>%
     ungroup()
+  
+  #### Export merged data 
+  write_csv(orgChem, glue::glue("orgChem_{year}.csv"))
+  
   
   f <- list()
   
@@ -188,8 +195,9 @@ for (year in PURYr$year) {
     # Caused by warning in `min()`:
     #   ! no non-missing arguments, returning NA
     
-    
-    
+    #### Export merged data 
+    g <- str_extract(file, "\\d+(?=\\.txt$)")
+    write_csv(product_data, glue::glue("first_collapse_{year}_{g}.csv"))
     
     collapsed_data$acre_treated[collapsed_data$unit_treated == "U"] <- NA
     
@@ -245,6 +253,10 @@ for (year in PURYr$year) {
                                                                     "herb_only", "herbicide", "insect_all", "insect_only", 
                                                                     "insect_fung","mergePrd", "mergeOrg" )],
                               by = "prodno", all.x = TRUE)
+    
+    #### Export merged data 
+    write_csv(merged_collapsed, glue::glue("second_collapse_{year}_{g}.csv"))
+    
     # Create the _merge classification based on the conditions
     merged_collapsed$merge <- case_when(
       # Case 2: Only in combined_prodType (orgPrd is not NA)
@@ -375,6 +387,9 @@ for (year in PURYr$year) {
       ) %>%
       ungroup()
     
+    #### Export merged data 
+    write_csv(collapsed_summary, glue::glue("third_collapse_{year}_{g}.csv"))
+    
     # code for how to drop values from year column equal to 1
     collapsed_summary <- collapsed_summary %>%
       filter(year != 1)
@@ -414,6 +429,9 @@ for (year in PURYr$year) {
   }
   assign(paste0("StatePUR_", year), building_list) 
   
+  #### Export merged data 
+  write_csv(building_list, glue::glue("StatePUR_{year}.csv"))
+  
 } 
 
 # Combine all the dataframes into one
@@ -423,28 +441,30 @@ write_csv(appendYears, "appendYears.csv")
 
 ###################################################
 
+appendYears <- read_csv("appendYears.csv")
+
 # Ensure orgField is correctly calculated
-appendYears <- appendYears %>%
+orgLag <- appendYears %>%
   mutate(orgField = (orgSpray == allSpray) & ((KgAIPest - KgAIOrg) < 1))
 
 # Collapse to minimum orgField by permitsite and year
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   group_by(permitsite, year) %>%
   summarise(orgField = min(orgField, na.rm = TRUE), .groups = "drop")
 
 # Generate unique site-year identifier
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   mutate(rpermitsite = as.numeric(as.factor(permitsite)))
 
 # Drop missing years
-appendYears <- appendYears %>% filter(!is.na(year))
+orgLag <- orgLag %>% filter(!is.na(year))
 
 # Time series filling (assuming filling missing years within each site)
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   complete(rpermitsite, year, fill = list(orgField = NA))
 
 # Creating lags for 1 and 2 years
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   arrange(rpermitsite, year) %>%
   group_by(rpermitsite) %>%
   mutate(
@@ -453,24 +473,24 @@ appendYears <- appendYears %>%
   )
 
 # Counting number of observed years per site
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   group_by(rpermitsite) %>%
   mutate(NumCult = sum(!is.na(permitsite))) 
 
 # Replacing missing values for lagged organic fields where the site was observed in at least 2 years
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   mutate(
     orgField_L1 = ifelse(NumCult > 1, orgField, orgField_L1),
     orgField_L2 = ifelse(NumCult > 1, orgField, orgField_L2)
   )
 
 # Sum of organic fields across lags
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   mutate(orgFieldLags = rowSums(across(starts_with("orgField")), na.rm = TRUE),
          orgField3y = as.integer(orgFieldLags == 3))
 
 # Collapse by permitsite and year
-appendYears <- appendYears %>%
+orgLag <- orgLag %>%
   group_by(permitsite, year) %>%
   summarise(
     orgField = min(orgField, na.rm = TRUE),
@@ -479,8 +499,14 @@ appendYears <- appendYears %>%
   ) %>%
   filter(permitsite != "")
 
-# Save as an RDS file (equivalent to Stata tempfile)
-saveRDS(appendYears, "OrgLag.rds")
+write.csv(orgLag, "orgLag.csv", row.names = FALSE)
 
+StatePUR1121 <- appendYears %>%
+  full_join(orgLag, by = c("permitsite", "year"))
 
+write.csv(StatePUR1121, "StatePUR1121.csv", row.names = FALSE)
 
+test <- read.csv("StatePUR1121.csv")
+
+oop <- test %>%
+  filter(permitsite == "27014530400010")
